@@ -31,8 +31,11 @@ btCollisionDispatcherMt::btCollisionDispatcherMt(btCollisionConfiguration* confi
 	m_batchManifoldsPtr.resize(btGetTaskScheduler()->getNumThreads());
 	m_batchReleasePtr.resize(btGetTaskScheduler()->getNumThreads());
 
-	m_batchUpdating = false;
 	m_grainSize = grainSize;  // iterations per task
+
+	btFullMemoryFence();
+	m_batchUpdating = false;
+	btFullMemoryFence();
 }
 
 btPersistentManifold* btCollisionDispatcherMt::getNewManifold(const btCollisionObject* body0, const btCollisionObject* body1)
@@ -60,7 +63,11 @@ btPersistentManifold* btCollisionDispatcherMt::getNewManifold(const btCollisionO
 		}
 	}
 	btPersistentManifold* manifold = new (mem) btPersistentManifold(body0, body1, 0, contactBreakingThreshold, contactProcessingThreshold);
-	if (!m_batchUpdating)
+
+	bool batchUpdating = m_batchUpdating;
+	btFullMemoryFence();
+
+	if (!batchUpdating)
 	{
 		// batch updater will update manifold pointers array after finishing, so
 		// only need to update array when not batch-updating
@@ -70,7 +77,9 @@ btPersistentManifold* btCollisionDispatcherMt::getNewManifold(const btCollisionO
 	}
 	else
 	{
-		m_batchManifoldsPtr[btGetCurrentThreadIndex()].push_back(manifold);
+		int current_thread_index = btGetCurrentThreadIndex();
+		btAssert(current_thread_index < m_batchManifoldsPtr.size());
+		m_batchManifoldsPtr[current_thread_index].push_back(manifold);
 	}
 
 	return manifold;
@@ -80,7 +89,10 @@ void btCollisionDispatcherMt::releaseManifold(btPersistentManifold* manifold)
 {
 	//btAssert( !btThreadsAreRunning() );
 	
-	if (!m_batchUpdating)
+	bool batchUpdating = m_batchUpdating;
+	btFullMemoryFence();
+
+	if (!batchUpdating)
 	{
 		clearManifold(manifold);
 		// batch updater will update manifold pointers array after finishing, so
@@ -91,7 +103,9 @@ void btCollisionDispatcherMt::releaseManifold(btPersistentManifold* manifold)
 		m_manifoldsPtr[findIndex]->m_index1a = findIndex;
 		m_manifoldsPtr.pop_back();
 	} else {
-		m_batchReleasePtr[btGetCurrentThreadIndex()].push_back(manifold);
+		int current_thread_index = btGetCurrentThreadIndex();
+		btAssert(current_thread_index < m_batchReleasePtr.size());
+		m_batchReleasePtr[current_thread_index].push_back(manifold);
 		return;
 	}
 
@@ -143,9 +157,15 @@ void btCollisionDispatcherMt::dispatchAllCollisionPairs(btOverlappingPairCache* 
 	updater.mDispatcher = this;
 	updater.mInfo = &info;
 
+	btFullMemoryFence();
 	m_batchUpdating = true;
+	btFullMemoryFence();
+
 	btParallelFor(0, pairCount, m_grainSize, updater);
+
+	btFullMemoryFence();
 	m_batchUpdating = false;
+	btFullMemoryFence();
 
 	// merge new manifolds, if any
 	for (int i = 0; i < m_batchManifoldsPtr.size(); ++i)

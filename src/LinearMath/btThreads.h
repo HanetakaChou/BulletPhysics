@@ -34,7 +34,6 @@ const unsigned int BT_MAX_THREAD_COUNT = 64;  // only if BT_THREADSAFE is 1
 bool btIsMainThread();
 bool btThreadsAreRunning();
 unsigned int btGetCurrentThreadIndex();
-void btResetThreadIndexCounter();  // notify that all worker threads have been destroyed
 
 ///
 /// btSpinMutex -- lightweight spin-mutex implemented with atomic ops, never puts
@@ -42,19 +41,135 @@ void btResetThreadIndexCounter();  // notify that all worker threads have been d
 ///               which has one thread per core and the threads don't sleep until they
 ///               run out of tasks. Not good for general purpose use.
 ///
+#if BT_THREADSAFE
+
+#if defined(__GNUC__)
+// GCC or CLANG
+#define USE_GCC_BUILTIN_ATOMICS_OLD 1
+#elif defined(_MSC_VER)
+#if defined(__clang__)
+// CLANG-CL
+#define USE_GCC_BUILTIN_ATOMICS_OLD 1
+#else
+// MSVC
+#define USE_MSVC_INTRINSICS 1
+#endif
+#else
+#error Unknown Compiler
+#endif
+
+#if USE_MSVC_INTRINSICS
+
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <intrin.h>
+
+#define btFullMemoryFence() MemoryBarrier()
+
 class btSpinMutex
 {
-	int mLock;
+	LONG volatile mLock;
 
 public:
-	btSpinMutex()
+	inline btSpinMutex() : mLock(0)
 	{
+	}
+
+	inline bool tryLock()
+	{
+		return (0 == mLock) && (0 == InterlockedCompareExchange(&mLock, 1, 0));
+	}
+
+	inline void lock()
+	{
+		while ((0 != mLock) || (0 != InterlockedCompareExchange(reinterpret_cast<long volatile *>(&mLock), 1, 0)))
+		{
+#if defined(_M_X64) || defined(_M_IX86)
+			_mm_pause();
+#elif defined(_M_ARM64) || defined(_M_ARM)
+			__yield();
+#else
+#error Unknown Architecture
+#endif
+		}
+	}
+
+	inline void unlock()
+	{
+		btFullMemoryFence();
 		mLock = 0;
 	}
-	void lock();
-	void unlock();
-	bool tryLock();
 };
+
+#elif USE_GCC_BUILTIN_ATOMICS_OLD
+
+#define btFullMemoryFence() __sync_synchronize()
+
+class btSpinMutex
+{
+	char volatile mLock;
+
+public:
+	inline btSpinMutex() : mLock(0)
+	{
+	}
+
+	inline bool tryLock()
+	{
+		return (0 == mLock) && (0 == __sync_val_compare_and_swap(&mLock, static_cast<char>(0), static_cast<char>(1)));
+	}
+
+	inline void lock()
+	{
+		while ((0 != mLock) || (0 != __sync_val_compare_and_swap(&mLock, static_cast<char>(0), static_cast<char>(1))))
+		{
+#if defined(__x86_64__) || defined(__i386__)
+			_mm_pause();
+#elif defined(__aarch64__) || defined(__arm__)
+			__yield();
+#else
+#error Unknown Architecture
+#endif
+		}
+	}
+
+	inline void unlock()
+	{
+		btFullMemoryFence();
+		mLock = 0;
+	}
+};
+
+#else // #elif USE_MSVC_INTRINSICS
+
+#error "no threading primitives defined -- unknown platform"
+
+#endif // #else //#elif USE_MSVC_INTRINSICS
+
+#else // #if BT_THREADSAFE
+
+// These should not be called ever
+class btSpinMutex
+{
+public:
+	inline bool tryLock()
+	{
+		btAssert(!"unimplemented btSpinMutex::tryLock() called");
+		return true;
+	}
+
+	inline void lock()
+	{
+		btAssert(!"unimplemented btSpinMutex::lock() called");
+	}
+
+	inline void unlock()
+	{
+		btAssert(!"unimplemented btSpinMutex::unlock() called");
+	}
+};
+
+#endif // #else //#if BT_THREADSAFE
 
 //
 // NOTE: btMutex* is for internal Bullet use only
@@ -127,21 +242,14 @@ public:
 	virtual ~btITaskScheduler() {}
 	const char* getName() const { return m_name; }
 
-	virtual int getMaxNumThreads() const = 0;
 	virtual int getNumThreads() const = 0;
-	virtual void setNumThreads(int numThreads) = 0;
+	virtual int getCurrentThreadIndex() const = 0;
 	virtual void parallelFor(int iBegin, int iEnd, int grainSize, const btIParallelForBody& body) = 0;
 	virtual btScalar parallelSum(int iBegin, int iEnd, int grainSize, const btIParallelSumBody& body) = 0;
 	virtual void sleepWorkerThreadsHint() {}  // hint the task scheduler that we may not be using these threads for a little while
 
-	// internal use only
-	virtual void activate();
-	virtual void deactivate();
-
 protected:
 	const char* m_name;
-	unsigned int m_savedThreadCounter;
-	bool m_isActive;
 };
 
 // set the task scheduler to use for all calls to btParallelFor()

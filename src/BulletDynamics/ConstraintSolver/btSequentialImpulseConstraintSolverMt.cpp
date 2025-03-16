@@ -32,8 +32,11 @@ btBatchedConstraints::BatchingMethod btSequentialImpulseConstraintSolverMt::s_jo
 btSequentialImpulseConstraintSolverMt::btSequentialImpulseConstraintSolverMt()
 {
 	m_numFrictionDirections = 1;
-	m_useBatching = false;
 	m_useObsoleteJointConstraints = false;
+
+	btFullMemoryFence();
+	m_useBatching = false;
+	btFullMemoryFence();
 }
 
 btSequentialImpulseConstraintSolverMt::~btSequentialImpulseConstraintSolverMt()
@@ -273,7 +276,11 @@ struct SetupContactConstraintsLoop : public btIParallelForBody
 void btSequentialImpulseConstraintSolverMt::setupAllContactConstraints(const btContactSolverInfo& infoGlobal)
 {
 	BT_PROFILE("setupAllContactConstraints");
-	if (m_useBatching)
+
+	bool useBatching = m_useBatching;
+	btFullMemoryFence();
+
+	if (useBatching)
 	{
 		const btBatchedConstraints& batchedCons = m_batchedContactConstraints;
 		SetupContactConstraintsLoop loop(this, &batchedCons, infoGlobal);
@@ -334,17 +341,25 @@ int btSequentialImpulseConstraintSolverMt::getOrInitSolverBodyThreadsafe(btColli
 		// to record the solverBodyId
 		int uniqueId = body.getWorldArrayIndex();
 		const int INVALID_SOLVER_BODY_ID = -1;
+		m_kinematicBodyUniqueIdToSolverBodyTableMutex.lock();
 		if (m_kinematicBodyUniqueIdToSolverBodyTable.size() <= uniqueId)
 		{
-			m_kinematicBodyUniqueIdToSolverBodyTableMutex.lock();
 			// now that we have the lock, check again
 			if (m_kinematicBodyUniqueIdToSolverBodyTable.size() <= uniqueId)
 			{
 				m_kinematicBodyUniqueIdToSolverBodyTable.resize(uniqueId + 1, INVALID_SOLVER_BODY_ID);
 			}
-			m_kinematicBodyUniqueIdToSolverBodyTableMutex.unlock();
 		}
+		// when another thread resizes the table, it will perform the following two steps:
+		// ANOTHER-1. allocate the new meomry block
+		// ANOTHER-2. copy the existing data from the old memory block to the new meomry block
+		//
+		// there can be such timeline:
+		// ANOTHER-1. another thread has allocated the new meomry block
+		// CURRENT. current thread is reading the **uninitialized** data from the new memory block
+		// ANOTHER-2. another thread will copy the existing data from the old memory block to the new meomry block, but this will not affect the uninitialized data read by the current thread
 		solverBodyId = m_kinematicBodyUniqueIdToSolverBodyTable[uniqueId];
+		m_kinematicBodyUniqueIdToSolverBodyTableMutex.unlock();
 		// if no table entry yet,
 		if (INVALID_SOLVER_BODY_ID == solverBodyId)
 		{
@@ -572,7 +587,10 @@ void btSequentialImpulseConstraintSolverMt::allocAllContactConstraints(btPersist
 
 void btSequentialImpulseConstraintSolverMt::convertContacts(btPersistentManifold** manifoldPtr, int numManifolds, const btContactSolverInfo& infoGlobal)
 {
-	if (!m_useBatching)
+	bool useBatching = m_useBatching;
+	btFullMemoryFence();
+
+	if (!useBatching)
 	{
 		btSequentialImpulseConstraintSolver::convertContacts(manifoldPtr, numManifolds, infoGlobal);
 		return;
@@ -587,7 +605,7 @@ void btSequentialImpulseConstraintSolverMt::convertContacts(btPersistentManifold
 			initSolverBody(&fixedBody, 0, infoGlobal.m_timeStep);
 		}
 		allocAllContactConstraints(manifoldPtr, numManifolds, infoGlobal);
-		if (m_useBatching)
+		if (useBatching)
 		{
 			setupBatchedContactConstraints();
 		}
@@ -685,7 +703,10 @@ struct ConvertJointsLoop : public btIParallelForBody
 
 void btSequentialImpulseConstraintSolverMt::convertJoints(btTypedConstraint** constraints, int numConstraints, const btContactSolverInfo& infoGlobal)
 {
-	if (!m_useBatching)
+	bool useBatching = m_useBatching;
+	btFullMemoryFence();
+
+	if (!useBatching)
 	{
 		btSequentialImpulseConstraintSolver::convertJoints(constraints, numConstraints, infoGlobal);
 		return;
@@ -836,11 +857,18 @@ btScalar btSequentialImpulseConstraintSolverMt::solveGroupCacheFriendlySetup(
 	btIDebugDraw* debugDrawer)
 {
 	m_numFrictionDirections = (infoGlobal.m_solverMode & SOLVER_USE_2_FRICTION_DIRECTIONS) ? 2 : 1;
+	
+	btFullMemoryFence();
 	m_useBatching = false;
+	btFullMemoryFence();
+
 	if (numManifolds >= s_minimumContactManifoldsForBatching &&
 		(s_allowNestedParallelForLoops || !btThreadsAreRunning()))
 	{
+		btFullMemoryFence();
 		m_useBatching = true;
+		btFullMemoryFence();
+
 		m_batchedContactConstraints.m_debugDrawer = debugDrawer;
 		m_batchedJointConstraints.m_debugDrawer = debugDrawer;
 	}
@@ -895,13 +923,16 @@ struct ContactSplitPenetrationImpulseSolverLoop : public btIParallelSumBody
 
 void btSequentialImpulseConstraintSolverMt::solveGroupCacheFriendlySplitImpulseIterations(btCollisionObject** bodies, int numBodies, btPersistentManifold** manifoldPtr, int numManifolds, btTypedConstraint** constraints, int numConstraints, const btContactSolverInfo& infoGlobal, btIDebugDraw* debugDrawer)
 {
+	bool useBatching = m_useBatching;
+	btFullMemoryFence();
+	
 	BT_PROFILE("solveGroupCacheFriendlySplitImpulseIterations");
 	if (infoGlobal.m_splitImpulse)
 	{
 		for (int iteration = 0; iteration < infoGlobal.m_numIterations; iteration++)
 		{
 			btScalar leastSquaresResidual = 0.f;
-			if (m_useBatching)
+			if (useBatching)
 			{
 				const btBatchedConstraints& batchedCons = m_batchedContactConstraints;
 				ContactSplitPenetrationImpulseSolverLoop loop(this, &batchedCons);
@@ -932,7 +963,10 @@ void btSequentialImpulseConstraintSolverMt::solveGroupCacheFriendlySplitImpulseI
 
 btScalar btSequentialImpulseConstraintSolverMt::solveSingleIteration(int iteration, btCollisionObject** bodies, int numBodies, btPersistentManifold** manifoldPtr, int numManifolds, btTypedConstraint** constraints, int numConstraints, const btContactSolverInfo& infoGlobal, btIDebugDraw* debugDrawer)
 {
-	if (!m_useBatching)
+	bool useBatching = m_useBatching;
+	btFullMemoryFence();
+
+	if (!useBatching)
 	{
 		return btSequentialImpulseConstraintSolver::solveSingleIteration(iteration, bodies, numBodies, manifoldPtr, numManifolds, constraints, numConstraints, infoGlobal, debugDrawer);
 	}

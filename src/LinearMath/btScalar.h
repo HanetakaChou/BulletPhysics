@@ -54,14 +54,20 @@ inline int btIsDoublePrecision()
 // see more https://stackoverflow.com/questions/1822887/what-is-the-best-way-to-eliminate-ms-visual-c-linker-warning-warning-lnk422
 
 #if defined(_MSC_VER)
+#if defined(__clang__)
+// CLANG-CL
+#define BT_NOT_EMPTY_FILE
+#else
+// MSVC
 #define BT_NOT_EMPTY_FILE_CAT_II(p, res) res
 #define BT_NOT_EMPTY_FILE_CAT_I(a, b) BT_NOT_EMPTY_FILE_CAT_II(~, a##b)
 #define BT_NOT_EMPTY_FILE_CAT(a, b) BT_NOT_EMPTY_FILE_CAT_I(a, b)
-#define BT_NOT_EMPTY_FILE                                      \
-	namespace                                                  \
-	{                                                          \
-	char BT_NOT_EMPTY_FILE_CAT(NoEmptyFileDummy, __COUNTER__); \
+#define BT_NOT_EMPTY_FILE                                          \
+	namespace                                                      \
+	{                                                              \
+		char BT_NOT_EMPTY_FILE_CAT(NoEmptyFileDummy, __COUNTER__); \
 	}
+#endif
 #else
 #define BT_NOT_EMPTY_FILE
 #endif
@@ -72,238 +78,109 @@ inline int btIsDoublePrecision()
 	#define BT_DEBUG
 #endif
 
-#ifdef _WIN32
-	#if  defined(__GNUC__)	// it should handle both MINGW and CYGWIN
-        	#define SIMD_FORCE_INLINE        __inline__ __attribute__((always_inline))
-        	#define ATTRIBUTE_ALIGNED16(a)   a __attribute__((aligned(16)))
-        	#define ATTRIBUTE_ALIGNED64(a)   a __attribute__((aligned(64)))
-        	#define ATTRIBUTE_ALIGNED128(a)  a __attribute__((aligned(128)))
-    	#elif ( defined(_MSC_VER) && _MSC_VER < 1300 )
-		#define SIMD_FORCE_INLINE inline
-		#define ATTRIBUTE_ALIGNED16(a) a
-		#define ATTRIBUTE_ALIGNED64(a) a
-		#define ATTRIBUTE_ALIGNED128(a) a
-	#elif defined(_M_ARM)
-		#define SIMD_FORCE_INLINE __forceinline
-		#define ATTRIBUTE_ALIGNED16(a) __declspec() a
-		#define ATTRIBUTE_ALIGNED64(a) __declspec() a
-		#define ATTRIBUTE_ALIGNED128(a) __declspec () a
-	#else//__MINGW32__
-		//#define BT_HAS_ALIGNED_ALLOCATOR
-		#pragma warning(disable : 4324) // disable padding warning
-//			#pragma warning(disable:4530) // Disable the exception disable but used in MSCV Stl warning.
-		#pragma warning(disable:4996) //Turn off warnings about deprecated C routines
-//			#pragma warning(disable:4786) // Disable the "debug name too long" warning
+#if defined(__GNUC__)
+    // GCC or CLANG
+    #define SIMD_FORCE_INLINE        __inline__ __attribute__((always_inline))
+    #define ATTRIBUTE_ALIGNED16(a)   a __attribute__((aligned(16)))
+    #define ATTRIBUTE_ALIGNED64(a)   a __attribute__((aligned(64)))
+    #define ATTRIBUTE_ALIGNED128(a)  a __attribute__((aligned(128)))
 
-		#define SIMD_FORCE_INLINE __forceinline
-		#define ATTRIBUTE_ALIGNED16(a) __declspec(align(16)) a
-		#define ATTRIBUTE_ALIGNED64(a) __declspec(align(64)) a
-		#define ATTRIBUTE_ALIGNED128(a) __declspec (align(128)) a
-		#ifdef _XBOX
-			#define BT_USE_VMX128
+    #if !defined(BT_USE_DOUBLE_PRECISION)
+    #if defined(__x86_64__) || defined(__i386__)
+		#define BT_USE_SSE
+        #define BT_USE_SIMD_VECTOR3
+        #define BT_ALLOW_SSE4
+        #if defined(__APPLE__)
+            // BT_USE_SSE_IN_API is enabled on Mac OSX by default, because memory is automatically aligned on 16-byte boundaries
+            // if apps run into issues, we will disable the next line
+            #define BT_USE_SSE_IN_API
+        #endif
+        #include <immintrin.h>
+    #elif defined(__aarch64__) || defined(__arm__)
+        #define BT_USE_NEON
+        #define BT_USE_SIMD_VECTOR3
+        #include <arm_neon.h>
+    #else
+        #error Unknown Architecture
+    #endif
+    #endif
 
-			#include <ppcintrinsics.h>
- 			#define BT_HAVE_NATIVE_FSEL
- 			#define btFsel(a,b,c) __fsel((a),(b),(c))
-		#else
+    #define btLikely(_c)   __builtin_expect((_c), 1)
+	#define btUnlikely(_c) __builtin_expect((_c), 0)
 
-#if defined (_M_ARM) || defined (_M_ARM64)
-            //Do not turn SSE on for ARM (may want to turn on BT_USE_NEON however)
-#elif (defined (_WIN32) && (_MSC_VER) && _MSC_VER >= 1400) && (!defined (BT_USE_DOUBLE_PRECISION))
+    #ifdef BT_DEBUG
+        #include <stdio.h>
+        #define btAssert(x) { if(!(x)) { printf("Assert " __FILE__ ":%u (%s)\n", __LINE__, #x); __builtin_trap(); } }
+    #else
+        #define btAssert(x)
+    #endif
+#elif defined(_MSC_VER)
+#if defined(__clang__)
+    // CLANG-CL
+    #define SIMD_FORCE_INLINE        __inline__ __attribute__((always_inline))
+    #define ATTRIBUTE_ALIGNED16(a)   a __attribute__((aligned(16)))
+    #define ATTRIBUTE_ALIGNED64(a)   a __attribute__((aligned(64)))
+    #define ATTRIBUTE_ALIGNED128(a)  a __attribute__((aligned(128)))
 
-#ifdef __clang__
-#define __BT_DISABLE_SSE__
+    #if !defined(BT_USE_DOUBLE_PRECISION)
+    #if defined(__x86_64__) || defined(__i386__)
+		#define BT_USE_SSE
+        #define BT_USE_SIMD_VECTOR3
+        #define BT_ALLOW_SSE4
+        #include <immintrin.h>
+    #elif defined(__aarch64__) || defined(__arm__)
+        #define BT_USE_NEON 1
+        #define BT_USE_SIMD_VECTOR3
+        #include <arm_neon.h>
+    #else
+        #error Unknown Architecture
+    #endif
+    #endif
+
+    #define btLikely(_c)   __builtin_expect((_c), 1)
+	#define btUnlikely(_c) __builtin_expect((_c), 0)
+#else
+    // MSVC    
+    #define SIMD_FORCE_INLINE        __forceinline
+    #define ATTRIBUTE_ALIGNED16(a) __declspec(align(16)) a
+    #define ATTRIBUTE_ALIGNED64(a) __declspec(align(64)) a
+    #define ATTRIBUTE_ALIGNED128(a) __declspec (align(128)) a
+    
+    #if !defined(BT_USE_DOUBLE_PRECISION)
+    #if defined(_M_X64) || defined(_M_IX86)
+		#define BT_USE_SSE
+        #define BT_USE_SIMD_VECTOR3
+        #define BT_ALLOW_SSE4
+        #include <immintrin.h>
+    #elif defined(_M_ARM64)
+        #define BT_USE_NEON 1
+        #define BT_USE_SIMD_VECTOR3
+        #include <arm64_neon.h>
+    #elif defined(_M_ARM)
+        #define BT_USE_NEON 1
+        #define BT_USE_SIMD_VECTOR3
+        #include <arm_neon.h>
+    #else
+        #error Unknown Architecture
+    #endif
+    #endif
+
+    #define btLikely(_c)  _c
+    #define btUnlikely(_c) _c
 #endif
-#ifndef __BT_DISABLE_SSE__
-			#if _MSC_VER>1400
-				#define BT_USE_SIMD_VECTOR3
-			#endif
-			#define BT_USE_SSE
-#endif//__BT_DISABLE_SSE__
-			#ifdef BT_USE_SSE
-
-#if (_MSC_FULL_VER >= 170050727)//Visual Studio 2012 can compile SSE4/FMA3 (but SSE4/FMA3 is not enabled by default)
-			#define BT_ALLOW_SSE4
-#endif //(_MSC_FULL_VER >= 160040219)
-
-			//BT_USE_SSE_IN_API is disabled under Windows by default, because 
-			//it makes it harder to integrate Bullet into your application under Windows 
-			//(structured embedding Bullet structs/classes need to be 16-byte aligned)
-			//with relatively little performance gain
-			//If you are not embedded Bullet data in your classes, or make sure that you align those classes on 16-byte boundaries
-			//you can manually enable this line or set it in the build system for a bit of performance gain (a few percent, dependent on usage)
-			//#define BT_USE_SSE_IN_API
-			#endif //BT_USE_SSE
-			#include <emmintrin.h>
+    // MSVC or CLANG-CL
+    #ifdef BT_DEBUG
+        #include <stdio.h>
+        #define btAssert(x) { if(!(x)) { printf("Assert " __FILE__ ":%u (%s)\n", __LINE__, #x); __debugbreak(); } }
+    #else
+        #define btAssert(x)
+    #endif
+#else
+#error Unknown Compiler
 #endif
 
-		#endif//_XBOX
-
-	#endif //__MINGW32__
-
-	#ifdef BT_DEBUG
-		#ifdef _MSC_VER
-			#include <stdio.h>
-			#define btAssert(x) { if(!(x)){printf("Assert " __FILE__ ":%u (%s)\n", __LINE__, #x);__debugbreak();	}}
-		#else//_MSC_VER
-			#include <assert.h>
-			#define btAssert assert
-		#endif//_MSC_VER
-	#else
-		#define btAssert(x)
-	#endif
-		//btFullAssert is optional, slows down a lot
-		#define btFullAssert(x)
-
-		#define btLikely(_c)  _c
-		#define btUnlikely(_c) _c
-
-#else//_WIN32
-	
-	#if defined	(__CELLOS_LV2__)
-		#define SIMD_FORCE_INLINE inline __attribute__((always_inline))
-		#define ATTRIBUTE_ALIGNED16(a) a __attribute__ ((aligned (16)))
-		#define ATTRIBUTE_ALIGNED64(a) a __attribute__ ((aligned (64)))
-		#define ATTRIBUTE_ALIGNED128(a) a __attribute__ ((aligned (128)))
-		#ifndef assert
-		#include <assert.h>
-		#endif
-		#ifdef BT_DEBUG
-			#ifdef __SPU__
-				#include <spu_printf.h>
-				#define printf spu_printf
-				#define btAssert(x) {if(!(x)){printf("Assert " __FILE__ ":%u ("#x")\n", __LINE__);spu_hcmpeq(0,0);}}
-			#else
-				#define btAssert assert
-			#endif
-	
-		#else//BT_DEBUG
-				#define btAssert(x)
-		#endif//BT_DEBUG
-		//btFullAssert is optional, slows down a lot
-		#define btFullAssert(x)
-
-		#define btLikely(_c)  _c
-		#define btUnlikely(_c) _c
-
-	#else//defined	(__CELLOS_LV2__)
-
-		#ifdef USE_LIBSPE2
-
-			#define SIMD_FORCE_INLINE __inline
-			#define ATTRIBUTE_ALIGNED16(a) a __attribute__ ((aligned (16)))
-			#define ATTRIBUTE_ALIGNED64(a) a __attribute__ ((aligned (64)))
-			#define ATTRIBUTE_ALIGNED128(a) a __attribute__ ((aligned (128)))
-			#ifndef assert
-			#include <assert.h>
-			#endif
-	#ifdef BT_DEBUG
-			#define btAssert assert
-	#else
-			#define btAssert(x)
-	#endif
-			//btFullAssert is optional, slows down a lot
-			#define btFullAssert(x)
-
-
-			#define btLikely(_c)   __builtin_expect((_c), 1)
-			#define btUnlikely(_c) __builtin_expect((_c), 0)
-		
-
-		#else//USE_LIBSPE2
-	//non-windows systems
-
-			#if (defined (__APPLE__) && (!defined (BT_USE_DOUBLE_PRECISION)))
-				#if defined (__i386__) || defined (__x86_64__)
-					#define BT_USE_SIMD_VECTOR3
-					#define BT_USE_SSE
-					//BT_USE_SSE_IN_API is enabled on Mac OSX by default, because memory is automatically aligned on 16-byte boundaries
-					//if apps run into issues, we will disable the next line
-					#define BT_USE_SSE_IN_API
-					#ifdef BT_USE_SSE
-						// include appropriate SSE level
-						#if defined (__SSE4_1__)
-							#include <smmintrin.h>
-						#elif defined (__SSSE3__)
-							#include <tmmintrin.h>
-						#elif defined (__SSE3__)
-							#include <pmmintrin.h>
-						#else
-							#include <emmintrin.h>
-						#endif
-					#endif //BT_USE_SSE
-				#elif defined( __ARM_NEON__ )
-					#ifdef __clang__
-						#define BT_USE_NEON 1
-						#define BT_USE_SIMD_VECTOR3
-		
-						#if defined BT_USE_NEON && defined (__clang__)
-							#include <arm_neon.h>
-						#endif//BT_USE_NEON
-				   #endif //__clang__
-				#endif//__arm__
-
-				#define SIMD_FORCE_INLINE inline __attribute__ ((always_inline))
-			///@todo: check out alignment methods for other platforms/compilers
-				#define ATTRIBUTE_ALIGNED16(a) a __attribute__ ((aligned (16)))
-				#define ATTRIBUTE_ALIGNED64(a) a __attribute__ ((aligned (64)))
-				#define ATTRIBUTE_ALIGNED128(a) a __attribute__ ((aligned (128)))
-				#ifndef assert
-				#include <assert.h>
-				#endif
-
-				#if defined(DEBUG) || defined (_DEBUG)
-				 #if defined (__i386__) || defined (__x86_64__)
-				#include <stdio.h>
-				 #define btAssert(x)\
-				{\
-				if(!(x))\
-				{\
-					printf("Assert %s in line %d, file %s\n",#x, __LINE__, __FILE__);\
-					asm volatile ("int3");\
-				}\
-				}
-				#else//defined (__i386__) || defined (__x86_64__)
-					#define btAssert assert
-				#endif//defined (__i386__) || defined (__x86_64__)
-				#else//defined(DEBUG) || defined (_DEBUG)
-					#define btAssert(x)
-				#endif//defined(DEBUG) || defined (_DEBUG)
-
-				//btFullAssert is optional, slows down a lot
-				#define btFullAssert(x)
-				#define btLikely(_c)  _c
-				#define btUnlikely(_c) _c
-
-			#else//__APPLE__
-
-				#define SIMD_FORCE_INLINE inline
-				///@todo: check out alignment methods for other platforms/compilers
-				///#define ATTRIBUTE_ALIGNED16(a) a __attribute__ ((aligned (16)))
-				///#define ATTRIBUTE_ALIGNED64(a) a __attribute__ ((aligned (64)))
-				///#define ATTRIBUTE_ALIGNED128(a) a __attribute__ ((aligned (128)))
-				#define ATTRIBUTE_ALIGNED16(a) a
-				#define ATTRIBUTE_ALIGNED64(a) a
-				#define ATTRIBUTE_ALIGNED128(a) a
-				#ifndef assert
-				#include <assert.h>
-				#endif
-
-				#if defined(DEBUG) || defined (_DEBUG)
-					#define btAssert assert
-				#else
-					#define btAssert(x)
-				#endif
-
-				//btFullAssert is optional, slows down a lot
-				#define btFullAssert(x)
-				#define btLikely(_c)  _c
-				#define btUnlikely(_c) _c
-			#endif //__APPLE__ 
-		#endif // LIBSPE2
-	#endif	//__CELLOS_LV2__
-#endif//_WIN32
-
+// btFullAssert is optional, slows down a lot
+#define btFullAssert(x)
 
 ///The btScalar type abstracts floating point numbers, to easily switch between double and single floating point precision.
 #if defined(BT_USE_DOUBLE_PRECISION)
@@ -321,43 +198,10 @@ inline int btIsDoublePrecision()
 #endif  //BT_USE_SSE
 
 #if defined(BT_USE_SSE)
-	//#if defined BT_USE_SSE_IN_API && defined (BT_USE_SSE)
-	#ifdef _WIN32
-
-		#ifndef BT_NAN
-			static int btNanMask = 0x7F800001;
-			#define BT_NAN (*(float *)&btNanMask)
-		#endif
-
-		#ifndef BT_INFINITY
-			static int btInfinityMask = 0x7F800000;
-			#define BT_INFINITY (*(float *)&btInfinityMask)
-			inline int btGetInfinityMask()  //suppress stupid compiler warning
-			{
-				return btInfinityMask;
-			}
-		#endif
-
-
-
-	//use this, in case there are clashes (such as xnamath.h)
-	#ifndef BT_NO_SIMD_OPERATOR_OVERLOADS
-	inline __m128 operator+(const __m128 A, const __m128 B)
-	{
-		return _mm_add_ps(A, B);
-	}
-
-	inline __m128 operator-(const __m128 A, const __m128 B)
-	{
-		return _mm_sub_ps(A, B);
-	}
-
-	inline __m128 operator*(const __m128 A, const __m128 B)
-	{
-		return _mm_mul_ps(A, B);
-	}
-	#endif  //BT_NO_SIMD_OPERATOR_OVERLOADS
-
+	
+	#define BT_NAN NAN
+	#define BT_INFINITY INFINITY
+	
 	#define btCastfTo128i(a) (_mm_castps_si128(a))
 	#define btCastfTo128d(a) (_mm_castps_pd(a))
 	#define btCastiTo128f(a) (_mm_castsi128_ps(a))
@@ -365,29 +209,15 @@ inline int btIsDoublePrecision()
 	#define btCastdTo128i(a) (_mm_castpd_si128(a))
 	#define btAssign128(r0, r1, r2, r3) _mm_setr_ps(r0, r1, r2, r3)
 
-	#else  //_WIN32
-
-		#define btCastfTo128i(a) ((__m128i)(a))
-		#define btCastfTo128d(a) ((__m128d)(a))
-		#define btCastiTo128f(a) ((__m128)(a))
-		#define btCastdTo128f(a) ((__m128)(a))
-		#define btCastdTo128i(a) ((__m128i)(a))
-		#define btAssign128(r0, r1, r2, r3) \
-			(__m128) { r0, r1, r2, r3 }
-		#define BT_INFINITY INFINITY
-		#define BT_NAN NAN
-	#endif  //_WIN32
-#else//BT_USE_SSE
-
-	#ifdef BT_USE_NEON
-	#include <arm_neon.h>
+#elif defined(BT_USE_NEON)
 
 	typedef float32x4_t btSimdFloat4;
 	#define BT_INFINITY INFINITY
 	#define BT_NAN NAN
 	#define btAssign128(r0, r1, r2, r3) \
 		(float32x4_t) { r0, r1, r2, r3 }
-	#else  //BT_USE_NEON
+
+#else
 
 	#ifndef BT_INFINITY
 	struct btInfMaskConverter
@@ -408,19 +238,8 @@ inline int btIsDoublePrecision()
 		return btInfinityMask.intmask;
 	}
 	#endif
-	#endif  //BT_USE_NEON
 
-#endif  //BT_USE_SSE
-
-#ifdef BT_USE_NEON
-	#include <arm_neon.h>
-
-	typedef float32x4_t btSimdFloat4;
-	#define BT_INFINITY INFINITY
-	#define BT_NAN NAN
-	#define btAssign128(r0, r1, r2, r3) \
-		(float32x4_t) { r0, r1, r2, r3 }
-#endif//BT_USE_NEON
+#endif 
 
 #define BT_DECLARE_ALIGNED_ALLOCATOR()                                                                     \
 	SIMD_FORCE_INLINE void *operator new(size_t sizeInBytes) { return btAlignedAlloc(sizeInBytes, 16); }   \

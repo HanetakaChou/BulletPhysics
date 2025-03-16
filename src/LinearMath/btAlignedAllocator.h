@@ -51,11 +51,7 @@ typedef int size_type;
 
 typedef void*(btAlignedAllocFunc)(size_t size, int alignment);
 typedef void(btAlignedFreeFunc)(void* memblock);
-typedef void*(btAllocFunc)(size_t size);
-typedef void(btFreeFunc)(void* memblock);
 
-///The developer can let all Bullet memory allocations go through a custom memory allocator, using btAlignedAllocSetCustom
-void btAlignedAllocSetCustom(btAllocFunc* allocFunc, btFreeFunc* freeFunc);
 ///If the developer has already an custom aligned allocator, then btAlignedAllocSetCustomAligned can be used. The default aligned allocator pre-allocates extra memory using the non-aligned allocator, and instruments it.
 void btAlignedAllocSetCustomAligned(btAlignedAllocFunc* allocFunc, btAlignedFreeFunc* freeFunc);
 

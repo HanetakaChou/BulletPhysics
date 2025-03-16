@@ -111,7 +111,6 @@ static inline __m128 btSimdDot3(__m128 vec0, __m128 vec1)
 }
 
 #if defined(BT_ALLOW_SSE4)
-#include <intrin.h>
 
 #define USE_FMA 1
 #define USE_FMA3_INSTEAD_FMA4 1

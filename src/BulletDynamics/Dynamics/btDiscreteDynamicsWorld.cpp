@@ -423,6 +423,7 @@ int btDiscreteDynamicsWorld::stepSimulation(btScalar timeStep, int maxSubSteps, 
 	if (numSimulationSubSteps)
 	{
 		//clamp the number of substeps, to prevent simulation grinding spiralling down to a halt
+		btAssert(numSimulationSubSteps <= maxSubSteps);
 		int clampedSimulationSteps = (numSimulationSubSteps > maxSubSteps) ? maxSubSteps : numSimulationSubSteps;
 
 		saveKinematicState(fixedTimeStep * clampedSimulationSteps);

@@ -50,10 +50,12 @@ protected:
 
 	btVector3 m_gravity;
 
+public:
 	//for variable timesteps
 	btScalar m_localTime;
 	btScalar m_fixedTimeStep;
 	//for variable timesteps
+protected:
 
 	bool m_ownsIslandManager;
 	bool m_ownsConstraintSolver;
